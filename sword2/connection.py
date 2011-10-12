@@ -245,7 +245,11 @@ Loading in a locally held Service Document:
         if self.raise_except:
             raise cls(resp)
         else:
-            if resp['content-type'] in ['text/xml', 'application/xml']:
+            content_type = resp['content-type']
+            pos = content_type.find(';')
+            if pos != -1:
+                content_type = content_type[:pos].strip()
+            if content_type in ['text/xml', 'application/xml']:
                 conn_l.info("Returning an error document, due to HTTP response code %s" % resp.status)
                 e = Error_Document(content, code=resp.status, resp = resp)
                 return e
