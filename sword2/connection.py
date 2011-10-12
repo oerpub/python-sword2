@@ -282,19 +282,19 @@ Loading in a locally held Service Document:
         """
         if resp['status'] == "401":
             conn_l.error("You are unauthorised (401) to access this document on the server. Check your username/password credentials and your 'On Behalf Of'")
-            self._return_error_or_exception(NotAuthorised, resp, content)
+            return self._return_error_or_exception(NotAuthorised, resp, content)
         elif resp['status'] == "403":
             conn_l.error("You are Forbidden (401) to POST to '%s'. Check your username/password credentials and your 'On Behalf Of'")
-            self._return_error_or_exception(Forbidden, resp, content)
+            return self._return_error_or_exception(Forbidden, resp, content)
         elif resp['status'] == "408":
             conn_l.error("Request Timeout (408) - error uploading.")
-            self._return_error_or_exception(RequestTimeOut, resp, content)
+            return self._return_error_or_exception(RequestTimeOut, resp, content)
         elif int(resp['status']) > 499:
             conn_l.error("Server error occured. Response headers from the server:\n%s" % resp)
-            self._return_error_or_exception(ServerError, resp, content)
+            return self._return_error_or_exception(ServerError, resp, content)
         else:
             conn_l.error("Unknown error occured. Response headers from the server:\n%s" % resp)
-            self._return_error_or_exception(HTTPResponseError, resp, content)
+            return self._return_error_or_exception(HTTPResponseError, resp, content)
     
     def _cache_deposit_receipt(self, d):
         """Method for storing the deposit receipts, and also for providing lookup dictionaries that
