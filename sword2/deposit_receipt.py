@@ -18,6 +18,9 @@ from atom_objects import Category
 from compatible_libs import etree
 from utils import NS, get_text
 
+NS = dict(NS)
+NS['sword'] = "{http://purl.org/net/sword/}%s"
+
 class Deposit_Receipt(object):
     def __init__(self, xml_deposit_receipt=None, dom=None, response_headers={}, location=None, code=0):
         """
@@ -117,6 +120,7 @@ Availible attributes:
         self.summary = None
         
         self.packaging = []
+        self.treatment = None
         self.categories = []
         self.content = {}
         self.cont_iri = None
@@ -154,6 +158,10 @@ Availible attributes:
                         self.metadata[field] = e.text.strip()
                     elif field == "sword_packaging":
                         self.packaging.append(e.text)
+                    elif field == "sword_treatment":
+                        # Special case since the sword:treatment might contain child tags
+                        body = etree.tounicode(e, with_tail=False)
+                        self.treatment = body[body.find('>')+1:body.rfind('<')]
                     else:
                         if field == "atom_title":
                             self.title = e.text
@@ -234,6 +242,8 @@ Availible attributes:
             _s.append(str(c))
         if self.packaging:
             _s.append("SWORD2 Package formats available: %s" % self.packaging)
+        if self.treatment:
+            _s.append("SWORD2 Treatment: %s" % self.treatment)
         if self.alternate:
             _s.append("Alternate IRI: %s" % self.alternate)
         for k, v in self.links.iteritems():
