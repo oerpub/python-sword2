@@ -213,6 +213,7 @@ Loading in a locally held Service Document:
         # return - No Exception will be raised!
         # Check Error_Document.code to get the response code, regardless to whether a valid Sword2 error document was received.
         self.raise_except = error_response_raises_exceptions
+        self.always_authenticate = always_authenticate
         
         self.keep_cache = cache_deposit_receipts
         self.h = httplib2.Http(".cache", timeout=30.0)
