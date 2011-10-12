@@ -189,7 +189,8 @@ def create_multipart_related(payloads):
     from email.MIMEBase import MIMEBase
     from email import Encoders
 
-    parts = []
+    # Build multi-part message
+    multipart = MIMEMultipart('related')
     for payload in payloads:
         # Create new part from its mimetype
         mimetype = payload.get('type')
@@ -215,9 +216,6 @@ def create_multipart_related(payloads):
         if payload['key'] == 'payload':
             Encoders.encode_base64(part)
 
-    # Build multi-part message
-    multipart = MIMEMultipart('related')
-    for part in parts:
         multipart.attach(part)
 
     # Determine multi-part content type
