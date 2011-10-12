@@ -124,7 +124,8 @@ Please see the testsuite for this class for more examples of the sorts of transa
                        keep_history=True,
                        cache_deposit_receipts=True,
                        honour_receipts=True,
-                       error_response_raises_exceptions=True):
+                       error_response_raises_exceptions=True,
+                       always_authenticate=False):
         """
 Creates a new Connection object.
 
@@ -174,6 +175,13 @@ Parameters:
                 #   If set to False - A `sword2.error_document:Error_Document` object will be returned.
                 
                 error_response_raises_exceptions=True
+
+                # Some web servers redirect to a login page rather than
+                # doing a HTTP challenge when authentication is needed.
+                # Set the always_authenticate flag to always include basic
+                # HTTP authentication headers in requests.
+
+                always_authenticate=False
                 )
                 
 If a `Connection` is created with the parameter `download_service_document` set to `False`, then no attempt
@@ -360,12 +368,27 @@ Loading in a locally held Service Document:
                                  sd_iri = self.sd_iri,
                                  valid = self.sd.valid,
                                  process_duration = took_time)
+
+    def _init_http_request_headers(self):
+        """Initialize the HTTP request headers."""
+        headers = {}
+
+        if self.always_authenticate:
+            # Always do basic HTTP authentication to the server. This
+            # is useful for servers that do a HTTP redirect for
+            # unauthenticated users.
+            cred_list = self.h.credentials.credentials
+            if len(cred_list) > 0:
+                import base64
+                headers['Authorization'] = 'Basic ' + base64.b64encode(cred_list[0][1] + ':' + cred_list[0][2])
+
+        return headers
     
     def get_service_document(self):
         """Perform an HTTP GET on the Service Document IRI (SD-IRI) and attempt to parse the result as
         a SWORD2 Service Document (using `self.load_service_document`)
         """
-        headers = {}
+        headers = self._init_http_request_headers()
         if self.on_behalf_of:
             headers['on-behalf-of'] = self.on_behalf_of
         self._t.start("SD_URI request")
@@ -408,7 +431,8 @@ Loading in a locally held Service Document:
                       empty = None,     # If this is True, then the POST/PUT is sent with an empty body
                                         # and the 'Content-Length' header explicitly set to 0
                       method = "POST",
-                      request_type=""       # text label for transaction history reports
+                      request_type="",       # text label for transaction history reports
+                      additional_headers = {},
                       ):
         """Performs an HTTP request, as defined by the parameters. This is an internally used method and it is best that it
         is not called directly.
@@ -462,7 +486,8 @@ Loading in a locally held Service Document:
             md5sum, f_size = get_md5(payload)
         
         # request-level headers
-        headers = {}
+        headers = self._init_http_request_headers()
+        headers.update(additional_headers)
         headers['In-Progress'] = str(in_progress).lower()
         if on_behalf_of:
             headers['On-Behalf-Of'] = self.on_behalf_of
@@ -515,7 +540,6 @@ Loading in a locally held Service Document:
             headers['Content-Type'] = "application/atom+xml;type=entry"
             data = str(metadata_entry)
             headers['Content-Length'] = str(len(data))
-            
             resp, content = self.h.request(target_iri, method, headers=headers, body = data)
             _, took_time = self._t.time_since_start(request_type)
             if self.history:
@@ -661,6 +685,7 @@ Loading in a locally held Service Document:
                         suggested_identifier=None,
                         in_progress=True,
                         on_behalf_of=None,
+                        additional_headers={},
                         ):
         """
 Creating a Resource
@@ -813,7 +838,8 @@ The SWORD server is not required to support packaging formats, but this profile 
                                   in_progress=in_progress,
                                   on_behalf_of=on_behalf_of,
                                   method="POST",
-                                  request_type='Col_IRI POST')
+                                  request_type='Col_IRI POST',
+                                  additional_headers=additional_headers)
         
     def update(self, metadata_entry = None,    # required for a metadata update
                              payload = None,            # required for a file update      
@@ -829,6 +855,7 @@ The SWORD server is not required to support packaging formats, but this profile 
                              metadata_relevant=False,
                              in_progress=False,
                              on_behalf_of=None,
+                             additional_headers={},
                       ):
         """
 Replacing the Metadata and/or Files of a Resource
@@ -937,7 +964,8 @@ response_headers, etc)
                                   in_progress=in_progress,
                                   metadata_relevant=str(metadata_relevant),
                                   method="PUT",
-                                  request_type=request_type)
+                                  request_type=request_type,
+                                  additional_headers=additional_headers)
 
 
         
@@ -951,7 +979,8 @@ response_headers, etc)
                         
                         on_behalf_of=None,
                         in_progress=False, 
-                        metadata_relevant=False
+                        metadata_relevant=False,
+                        additional_headers={},
                         ):
         """
 Adding Files to the Media Resource
@@ -999,7 +1028,8 @@ response_headers, etc)
                                   in_progress=in_progress,
                                   method="POST",
                                   metadata_relevant=metadata_relevant,
-                                  request_type='EM_IRI POST (APPEND)')
+                                  request_type='EM_IRI POST (APPEND)',
+                                  additional_headers=additional_headers)
 
     def append(self, 
                         se_iri = None,  
@@ -1013,7 +1043,8 @@ response_headers, etc)
                         metadata_entry = None,
                         metadata_relevant = False,
                         in_progress = False,
-                        dr = None
+                        dr = None,
+                        additional_headers={},
                         ):
         """
 Adding Content to a Resource
@@ -1147,12 +1178,14 @@ response_headers, etc)
                                   in_progress=in_progress, 
                                   method="POST",
                                   metadata_relevant=metadata_relevant,
-                                  request_type='SE_IRI POST (APPEND PKG)')
+                                  request_type='SE_IRI POST (APPEND PKG)',
+                                  additional_headers=additional_headers)
 
 
     def delete(self,
                         resource_iri,
-                        on_behalf_of=None):
+                        on_behalf_of=None,
+                        additional_headers={}):
         """
 Delete resource
 
@@ -1164,7 +1197,8 @@ Can be given the optional parameter of `on_behalf_of`.
         return self._make_request(target_iri = resource_iri,
                                   on_behalf_of=on_behalf_of,
                                   method="DELETE",
-                                  request_type='IRI DELETE')
+                                  request_type='IRI DELETE',
+                                  additional_headers=additional_headers)
 
     def delete_content_of_resource(self, edit_media_iri = None,
                                          on_behalf_of = None,
@@ -1258,7 +1292,8 @@ and the correct IRI will automatically be chosen.
     def complete_deposit(self,
                         se_iri = None,
                         on_behalf_of=None,
-                        dr = None):
+                        dr = None,
+                        additional_headers={}):
         """
 Completing a Previously Incomplete Deposit
 
@@ -1301,7 +1336,8 @@ and the correct IRI will automatically be chosen.
                                   in_progress='false',
                                   method="POST",
                                   empty=True,
-                                  request_type='SE_IRI Complete Deposit')
+                                  request_type='SE_IRI Complete Deposit',
+                                  additional_headers=additional_headers)
 
     def update_files_for_resource(self, 
                         payload,       # These need to be set to upload a file      
@@ -1316,7 +1352,8 @@ and the correct IRI will automatically be chosen.
                         in_progress=False, 
                         metadata_relevant=False,
                         # Pass back the deposit receipt to automatically get the right IRI to use
-                        dr = None
+                        dr = None,
+                        additional_headers={},
                         ):
         """
 Replacing the File Content of a Resource
@@ -1389,14 +1426,15 @@ response_headers, etc)
                                   on_behalf_of=on_behalf_of,
                                   method="PUT",
                                   metadata_relevant=str(metadata_relevant),
-                                  request_type='EM_IRI PUT')
+                                  request_type='EM_IRI PUT',
+                                  additional_headers=additional_headers)
 
     def update_metadata_for_resource(self, metadata_entry,    # required
                                            edit_iri = None,
                                            in_progress=False,
                                            on_behalf_of=None,
-                                           dr = None
-                                           ):
+                                           dr = None,
+                                           additional_headers={}):
         """
 Replacing the Metadata of a Resource
 
@@ -1472,7 +1510,8 @@ response_headers, etc)
                                   on_behalf_of=on_behalf_of,
                                   in_progress=in_progress, 
                                   method="PUT",
-                                  request_type='Edit_IRI PUT')
+                                  request_type='Edit_IRI PUT',
+                                  additional_headers=additional_headers)
 
     def update_metadata_and_files_for_resource(self, metadata_entry,    # required
                                                      payload,       # These need to be set to upload a file      
@@ -1486,7 +1525,8 @@ response_headers, etc)
                                                      metadata_relevant=False,
                                                      in_progress=False,
                                                      on_behalf_of=None,
-                                                     dr = None
+                                                     dr = None,
+                                                     additional_headers={},
                                               ):
         """
 Replacing the Metadata and Files of a Resource
@@ -1572,7 +1612,8 @@ response_headers, etc)
                                   in_progress=in_progress,
                                   metadata_relevant=str(metadata_relevant),
                                   method="PUT",
-                                  request_type='Edit_IRI PUT')
+                                  request_type='Edit_IRI PUT',
+                                  additional_headers=additional_headers)
 
 
     def get_atom_sword_statement(self, sword_statement_iri):
@@ -1634,6 +1675,10 @@ Response:
 
         """
                 
+        all_headers = self._init_http_request_headers()
+        all_headers.update(headers)
+        headers = all_headers
+
         if not content_iri:
             if dr != None:
                 conn_l.info("Using the deposit receipt to get the SWORD2-Edit-IRI")
