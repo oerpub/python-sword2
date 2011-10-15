@@ -1,0 +1,5 @@
+syntax: glob
+*.pyc
+sword2.egg-info/
+build/
+dist/
