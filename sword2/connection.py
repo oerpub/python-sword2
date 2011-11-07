@@ -554,7 +554,6 @@ Loading in a locally held Service Document:
             
         elif metadata_entry and filename and payload:
             # Multipart resource creation
-            import time
             multicontent_type, payload_data = create_multipart_related([{'key':'atom',
                                                                     'type':'application/atom+xml; charset="utf-8"',
                                                                     'data':str(metadata_entry),  # etree default is utf-8
@@ -571,8 +570,6 @@ Loading in a locally held Service Document:
                                                                    
             headers['Content-Type'] = multicontent_type + '; type="application/atom+xml"'
             headers['Content-Length'] = str(len(payload_data))    # must be str, not int type
-            with open('/tmp/body.dat','wb') as fp:
-                fp.write(payload_data)
             resp, content = curl_request(self.h, target_iri, method, headers=headers, body = payload_data)
             _, took_time = self._t.time_since_start(request_type)
             if self.history:
