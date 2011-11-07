@@ -12,7 +12,7 @@ about the SWORD2 AtomPub profile.
 from sword2_logging import logging
 conn_l = logging.getLogger(__name__)
 
-from utils import Timer, NS, get_md5, create_multipart_related
+from utils import Timer, NS, get_md5, create_multipart_related, curl_request
 
 from transaction_history import Transaction_History
 from service_document import ServiceDocument
@@ -393,7 +393,7 @@ Loading in a locally held Service Document:
         if self.on_behalf_of:
             headers['on-behalf-of'] = self.on_behalf_of
         self._t.start("SD_URI request")
-        resp, content = self.h.request(self.sd_iri, "GET", headers=headers)
+        resp, content = curl_request(self.h, self.sd_iri, "GET", headers=headers)
         _, took_time = self._t.time_since_start("SD_URI request")
         if self.history:
             self.history.log('SD_IRI GET', 
@@ -514,7 +514,7 @@ Loading in a locally held Service Document:
         if empty:
             # NULL body with explicit zero length.
             headers['Content-Length'] = "0"
-            resp, content = self.h.request(target_iri, method, headers=headers)
+            resp, content = curl_request(self.h, target_iri, method, headers=headers)
             _, took_time = self._t.time_since_start(request_type)
             if self.history:
                 self.history.log(request_type + ": Empty request", 
@@ -525,7 +525,7 @@ Loading in a locally held Service Document:
                                  headers = headers,
                                  process_duration = took_time)  
         elif method == "DELETE":
-            resp, content = self.h.request(target_iri, method, headers=headers)
+            resp, content = curl_request(self.h, target_iri, method, headers=headers)
             _, took_time = self._t.time_since_start(request_type)
             if self.history:
                 self.history.log(request_type + ": DELETE request", 
@@ -541,7 +541,7 @@ Loading in a locally held Service Document:
             headers['Content-Type'] = "application/atom+xml;type=entry"
             data = str(metadata_entry)
             headers['Content-Length'] = str(len(data))
-            resp, content = self.h.request(target_iri, method, headers=headers, body = data)
+            resp, content = curl_request(self.h, target_iri, method, headers=headers, body = data)
             _, took_time = self._t.time_since_start(request_type)
             if self.history:
                 self.history.log(request_type + ": Metadata-only resource request", 
@@ -554,6 +554,7 @@ Loading in a locally held Service Document:
             
         elif metadata_entry and filename and payload:
             # Multipart resource creation
+            import time
             multicontent_type, payload_data = create_multipart_related([{'key':'atom',
                                                                     'type':'application/atom+xml; charset="utf-8"',
                                                                     'data':str(metadata_entry),  # etree default is utf-8
@@ -570,7 +571,9 @@ Loading in a locally held Service Document:
                                                                    
             headers['Content-Type'] = multicontent_type + '; type="application/atom+xml"'
             headers['Content-Length'] = str(len(payload_data))    # must be str, not int type
-            resp, content = self.h.request(target_iri, method, headers=headers, body = payload_data)
+            with open('/tmp/body.dat','wb') as fp:
+                fp.write(payload_data)
+            resp, content = curl_request(self.h, target_iri, method, headers=headers, body = payload_data)
             _, took_time = self._t.time_since_start(request_type)
             if self.history:
                 self.history.log(request_type + ": Multipart resource request",
@@ -597,7 +600,7 @@ Loading in a locally held Service Document:
             headers['Content-Disposition'] = "attachment; filename=%s" % filename   # TODO: ensure filename is ASCII
             headers['Packaging'] = str(packaging)
             
-            resp, content = self.h.request(target_iri, method, headers=headers, body = payload)
+            resp, content = curl_request(self.h, target_iri, method, headers=headers, body = payload)
             _, took_time = self._t.time_since_start(request_type)
             if self.history:
                 self.history.log(request_type + ": simple resource request",
@@ -1714,7 +1717,7 @@ Response:
             conn_l.info("IRI GET resource '%s' with Accept-Packaging:%s" % (content_iri, packaging))
         else:
             conn_l.info("IRI GET resource '%s'" % content_iri)
-        resp, content = self.h.request(content_iri, "GET", headers=headers)
+        resp, content = curl_request(self.h, content_iri, "GET", headers=headers)
         _, took_time = self._t.time_since_start("IRI GET resource")
         if self.history:
             self.history.log('Cont_IRI GET resource', 

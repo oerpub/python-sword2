@@ -230,3 +230,87 @@ def create_multipart_related(payloads):
         content_type += message_body[start:stop].strip()
 
     return content_type, message_body
+
+def curl_request(http_object, uri, method='GET', body=None, headers=None, redirections=5, connection_type=None):
+    """
+    request(self, uri, method='GET', body=None, headers=None, redirections=5, connection_type=None)
+        Performs a single HTTP request.
+        The 'uri' is the URI of the HTTP resource and can begin 
+        with either 'http' or 'https'. The value of 'uri' must be an absolute URI.
+        
+        The 'method' is the HTTP method to perform, such as GET, POST, DELETE, etc. 
+        There is no restriction on the methods allowed.
+        
+        The 'body' is the entity body to be sent with the request. It is a string
+        object.
+        
+        Any extra headers that are to be sent with the request should be provided in the
+        'headers' dictionary.
+        
+        The maximum number of redirect to follow before raising an 
+        exception is 'redirections. The default is 5.
+        
+        The return value is a tuple of (response, content), the first 
+        being and instance of the 'Response' class, the second being 
+        a string that contains the response entity body.
+    """
+
+    iHttpObject = http_object
+    iUri = uri
+    iMethod = method
+    iBody = body
+    iHeaders = headers
+    iRedirections = redirections
+    iConnectionType = connection_type
+
+    if (iMethod == 'POST') and (iBody is not None):
+        import pycurl, httplib2, StringIO
+
+        curl = pycurl.Curl()
+        curl.setopt(curl.URL, str(iUri))
+        curl.setopt(curl.POST, 1)
+
+        # Create stream for transmission
+        stream = StringIO.StringIO(iBody)
+        curl.setopt(curl.READFUNCTION, stream.read)
+
+        curl.setopt(curl.VERBOSE, 0) # Change for verbose / debug output
+        curl.setopt(curl.HTTPHEADER, [(k + ': ' + v) for k,v in iHeaders.iteritems()])
+
+        # Create stream for response headers and data
+        response_headers = StringIO.StringIO()
+        curl.setopt(curl.HEADERFUNCTION, response_headers.write)
+        response_data = StringIO.StringIO()
+        curl.setopt(curl.WRITEFUNCTION, response_data.write)
+
+        curl.perform()
+
+        # Build response
+        response_headers.seek(0)
+        headers = response_headers.read().strip()
+        if '\r\n' in headers:
+            headers = headers.split('\r\n')
+        else:
+            headers = headers.split('\n')
+        http_response = headers[0].split(None, 2)
+        del headers[0]
+        headers = [(x[0].lower(), x[1]) for x in [x.split(': ') for x in headers]]
+        if http_response[0][:5].lower() != 'http/':
+            raise ValueError, "Invalid http response from cURL."
+        version = {'1.0': 10, '1.1': 11}[http_response[0][5:]]
+        status = http_response[1]
+        reason = http_response[2]
+        headers.append(('status', status))
+        return_headers = httplib2.Response(dict(headers))
+        return_headers.version = version
+        return_headers.status = int(status)
+        return_headers.reason = reason
+
+        response_data.seek(0)
+        return_content = response_data.read()
+        curl.close()
+
+        return return_headers, return_content
+    else:
+        return iHttpObject.request(iUri, method=iMethod, body=iBody, headers=iHeaders,
+                                   redirections=iRedirections, connection_type=iConnectionType)
