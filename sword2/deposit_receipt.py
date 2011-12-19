@@ -239,7 +239,7 @@ Availible attributes:
         if self.se_iri:
             _s.append("SWORD2 Add IRI: %s" % self.se_iri)
         for c in self.categories:
-            _s.append(str(c))
+            _s.append(unicode(c))
         if self.packaging:
             _s.append("SWORD2 Package formats available: %s" % self.packaging)
         if self.treatment:

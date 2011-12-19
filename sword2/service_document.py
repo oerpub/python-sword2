@@ -71,7 +71,8 @@ class ServiceDocument(object):
             self.load_document(xml_response)
 
     def load_document(self, xml_response):
-        try:
+        #try:
+        if True:
             if self.sd_uri:
                 sd_l.debug("Attempting to load service document for %s" % self.sd_uri)
             else:
@@ -82,12 +83,14 @@ class ServiceDocument(object):
             self.valid = self.validate()
             sd_l.info("Initial SWORD2 validation checks on service document - Valid document? %s" % self.valid)
             self._enumerate_workspaces()
+        """
         except Exception, e:
             # Due to variability of underlying etree implementations, catching all
             # exceptions...
             sd_l.error("Could not parse the Service Document response from the server - %s" % e)
             sd_l.debug("Received the following raw response:")
             sd_l.debug(self.raw_response)
+            """
 
     def validate(self):
         valid = True

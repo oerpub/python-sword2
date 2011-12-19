@@ -196,7 +196,7 @@ class SDCollection(object):
         self.acceptPackaging = get_text(collection, NS['sword'] % 'acceptPackaging', plural = True)
         
         # Log collection details:
-        coll_l.debug(str(self))
+        coll_l.debug(unicode(self))
     
     def __str__(self):
         """Provides a simple display of the pertinent information in this object suitable for CLI logging."""
@@ -214,7 +214,7 @@ class SDCollection(object):
         if self.service:
             _s.append("SWORD: Nested Service Documents - '%s'" % self.service)
         for c in self.categories:
-            _s.append(str(c))
+            _s.append(unicode(c))
         return "\n".join(_s)
 
     def __repr__(self):
