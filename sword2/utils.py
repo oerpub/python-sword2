@@ -333,8 +333,17 @@ def curl_request(http_object, uri, method='GET', body=None, headers=None, redire
             headers = headers.split('\r\n')
         else:
             headers = headers.split('\n')
-        http_response = headers[0].split(None, 2)
+        http_response = headers[2].split(None, 2) # HOTFIX MARVIN 2012-01-26
+        # MARVIN: FOR DEBUGGING:
+        print "HTTP RESPONE ============================="
+        print http_response
+        print "=========================================="
+        print "HEADERS =================================="
+        print headers
+        print "=========================================="
         del headers[0]
+        del headers[0] # HOTFIX MARVIN 2012-01-26
+        del headers[0] # HOTFIX MARVIN 2012-01-26
         headers = [(x[0].lower(), x[1]) for x in [x.split(': ') for x in headers]]
         if http_response[0][:5].lower() != 'http/':
             raise ValueError, "Invalid http response from cURL."
