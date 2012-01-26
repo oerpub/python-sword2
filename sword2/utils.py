@@ -288,6 +288,13 @@ def curl_request(http_object, uri, method='GET', body=None, headers=None, redire
         else:
             headers = headers.split('\n')
         http_response = headers[0].split(None, 2)
+        # MARVIN: FOR DEBUGGING:
+        print "HTTP RESPONE ============================="
+        print http_response
+        print "=========================================="
+        print "HEADERS =================================="
+        print headers
+        print "=========================================="        
         del headers[0]
         headers = [(x[0].lower(), x[1]) for x in [x.split(': ') for x in headers]]
         if http_response[0][:5].lower() != 'http/':
