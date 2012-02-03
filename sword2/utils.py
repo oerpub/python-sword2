@@ -13,6 +13,8 @@ from datetime import datetime
 
 from base64 import b64encode
 
+from mimetools import Message
+
 try:
     from hashlib import md5
 except ImportError:
@@ -327,14 +329,21 @@ def curl_request(http_object, uri, method='GET', body=None, headers=None, redire
         curl.perform()
 
         # Build response
+
         response_headers.seek(0)
+
         headers = response_headers.read().strip()
         if '\r\n' in headers:
             headers = headers.split('\r\n')
         else:
             headers = headers.split('\n')
+        print('HEADERS IS '+str(headers))
         http_response = headers[0].split(None, 2)
         del headers[0]
+        if(http_response[1] == '100'):
+            del headers[0]
+            http_response=headers[0].split(None,2)
+            del headers[0]
         headers = [(x[0].lower(), x[1]) for x in [x.split(': ') for x in headers]]
         if http_response[0][:5].lower() != 'http/':
             raise ValueError, "Invalid http response from cURL."
