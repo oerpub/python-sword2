@@ -392,7 +392,7 @@ Loading in a locally held Service Document:
 
         headers = {}
 
-        if self.always_authenticate:
+        if self.always_authenticate and isinstance(self.h, http_layer.HttpLib2Layer):
             # Always do basic HTTP authentication to the server. This
             # is useful for servers that do a HTTP redirect for
             # unauthenticated users.

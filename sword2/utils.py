@@ -13,6 +13,7 @@ from datetime import datetime
 
 from base64 import b64encode
 
+from mimetools import Message
 try:
     from hashlib import md5
 except ImportError:
@@ -186,38 +187,49 @@ def create_multipart_related(payloads):
     SWORD2 multipart POST/PUT expects two attachments - key = 'atom' w/ Atom Entry (metadata)
                                                         key = 'payload' (file)
     """
-    # Generate random boundary code
-    # TODO check that it does not occur in the payload data
-    bhash = md5(datetime.now().isoformat()).hexdigest()    # eg 'd8bb3ea6f4e0a4b4682be0cfb4e0a24e'
-    BOUNDARY = '===========%s_$' % bhash
-    CRLF = '\r\n'   # As some servers might barf without this.
-    body = []
-    for payload in payloads:   # predicatable ordering...
-        body.append('--' + BOUNDARY)
-        if payload.get('type', None):
-            body.append('Content-Type: %(type)s' % payload)
-        else:
-            body.append('Content-Type: %s' % get_content_type(payload.get("filename")))
-            
+
+    from email.MIMEMultipart import MIMEMultipart
+    from email.MIMEBase import MIMEBase
+    from email import Encoders
+
+    # Build multi-part message
+    multipart = MIMEMultipart('related')
+    for payload in payloads:
+        # Create new part from its mimetype
+        mimetype = payload.get('type')
+        if mimetype is None:
+            mimetype = get_content_type(payload.get("filename"))
+        part = MIMEBase(*(mimetype.split('/')))
+
+        # Set the name and filename of the payload
         if payload.get('filename', None):
-            body.append('Content-Disposition: attachment; name="%(key)s"; filename="%(filename)s"' % (payload))
+            part.add_header('Content-Disposition', 'attachment',
+                            name=payload['key'], filename=payload['filename'])
         else:
-            body.append('Content-Disposition: attachment; name="%(key)s"' % (payload))
-        
+            part.add_header('Content-Disposition', 'attachment',
+                            name=payload['key'])
+
+        # Set additional headers
         if payload.has_key("headers"):
-            for f,v in payload['headers'].iteritems():
-                body.append("%s: %s" % (f, v))     # TODO force ASCII?
-        
-        body.append('MIME-Version: 1.0')
+            for k, v in payload['headers'].iteritems():
+                part.add_header(k, v)
+
+        # Attach payload
+        part.set_payload(payload['data'])
         if payload['key'] == 'payload':
-            body.append('Content-Transfer-Encoding: base64')
-            body.append('')
-            body.append(b64encode(payload['data']))
-        else:
-            body.append('')
-            body.append(payload['data'])
-    body.append('--' + BOUNDARY + '--')
-    body.append('')
-    body_bytes = CRLF.join(body)
-    content_type = 'multipart/related; boundary="%s"' % BOUNDARY
-    return content_type, body_bytes
+            Encoders.encode_base64(part)
+
+        multipart.attach(part)
+
+    # Determine multi-part content type
+    message_body = multipart.as_string(unixfrom=False)
+    substr = 'content-type: '
+    assert message_body[:len(substr)].lower() == substr.lower()
+    stop = message_body.find('\n')
+    content_type = message_body[len(substr):stop].strip()
+    while content_type[-1] == ';':
+        start = stop+1
+        stop = message_body.find('\n', start)
+        content_type += message_body[start:stop].strip()
+
+    return content_type, message_body

@@ -57,7 +57,6 @@ class HttpLib2Layer(HttpLayer):
     def request(self, uri, method, headers=None, body=None):
         print "uri: " + uri
         print "method: " + method
-        print "headers: " + headers
         resp, content = self.h.request(uri, method, headers=headers, body=body)
         print "Marvin:"
         print resp
@@ -85,6 +84,7 @@ class PreemptiveBasicAuthHandler(urllib2.HTTPBasicAuthHandler):
 class UrlLib2Response(HttpResponse):
     def __init__(self, response):
         self.response = response
+        print response
         self.headers = dict(response.info())
         self.status = int(self.response.code)
     
