@@ -49,12 +49,20 @@ class HttpLib2Response(HttpResponse):
 class HttpLib2Layer(HttpLayer):
     def __init__(self, cache_dir, timeout=30):
         self.h = httplib2.Http(".cache", timeout=30.0)
+        self.credentials = self.h.credentials
         
     def add_credentials(self, username, password):
         self.h.add_credentials(username, password)
         
     def request(self, uri, method, headers=None, body=None):
+        print "uri: " + uri
+        print "method: " + method
+        print "headers: " + headers
         resp, content = self.h.request(uri, method, headers=headers, body=body)
+        print "Marvin:"
+        print resp
+        print "==================="
+        print content
         return (HttpLib2Response(resp), content)
 
 ################################################################################    

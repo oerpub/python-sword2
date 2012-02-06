@@ -128,7 +128,8 @@ Please see the testsuite for this class for more examples of the sorts of transa
                        error_response_raises_exceptions=True,
                        
                        # http layer implementation if different from default
-                       http_impl=None):
+                       http_impl=None,
+                       always_authenticate=False):
         """
 Creates a new Connection object.
 
@@ -178,6 +179,13 @@ Parameters:
                 #   If set to False - A `sword2.error_document:Error_Document` object will be returned.
                 
                 error_response_raises_exceptions=True
+
+                # Some web servers redirect to a login page rather than
+                # doing a HTTP challenge when authentication is needed.
+                # Set the always_authenticate flag to always include basic
+                # HTTP authentication headers in requests.
+
+                always_authenticate=False
                 )
                 
 If a `Connection` is created with the parameter `download_service_document` set to `False`, then no attempt
@@ -209,6 +217,7 @@ Loading in a locally held Service Document:
         # return - No Exception will be raised!
         # Check Error_Document.code to get the response code, regardless to whether a valid Sword2 error document was received.
         self.raise_except = error_response_raises_exceptions
+        self.always_authenticate = always_authenticate
         
         self.keep_cache = cache_deposit_receipts
         
@@ -376,11 +385,29 @@ Loading in a locally held Service Document:
                                  valid = self.sd.valid,
                                  process_duration = took_time)
     
+
+    def _init_http_request_headers(self):
+        """Initialize the HTTP request headers."""
+
+
+        headers = {}
+
+        if self.always_authenticate:
+            # Always do basic HTTP authentication to the server. This
+            # is useful for servers that do a HTTP redirect for
+            # unauthenticated users.
+            cred_list = self.h.credentials.credentials
+            if len(cred_list) > 0:
+                import base64
+                headers['Authorization'] = 'Basic ' + base64.b64encode(cred_list[0][1] + ':' + cred_list[0][2])
+
+        return headers
+
     def get_service_document(self):
         """Perform an HTTP GET on the Service Document IRI (SD-IRI) and attempt to parse the result as
         a SWORD2 Service Document (using `self.load_service_document`)
         """
-        headers = {}
+        headers = self._init_http_request_headers()
         if self.on_behalf_of:
             headers['on-behalf-of'] = self.on_behalf_of
         self._t.start("SD_URI request")
@@ -485,7 +512,7 @@ Loading in a locally held Service Document:
                 md5sum = md5
         
         # request-level headers
-        headers = {}
+        headers = self._init_http_request_headers()
         headers['In-Progress'] = str(in_progress).lower()
         if on_behalf_of:
             headers['On-Behalf-Of'] = on_behalf_of
@@ -1719,6 +1746,9 @@ Response:
         `ContentWrapper.code`    -- status code ('200' on success.)
 
         """
+        all_headers = self._init_http_request_headers()
+        all_headers.update(headers)
+        headers = all_headers
         if not content_iri:
             if dr != None:
                 conn_l.info("Using the deposit receipt to get the SWORD2-Edit-IRI")
