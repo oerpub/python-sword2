@@ -47,7 +47,6 @@ SWORD v2 python client""",
     zip_safe=False,
     install_requires=[
         "httplib2",
-        "pycurl",
     ],
     # Following left in as a memory aid for later-
     #entry_points="""

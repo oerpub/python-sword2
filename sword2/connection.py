@@ -12,18 +12,19 @@ about the SWORD2 AtomPub profile.
 from sword2_logging import logging
 conn_l = logging.getLogger(__name__)
 
-from utils import Timer, NS, get_md5, create_multipart_related, curl_request
+from utils import Timer, NS, get_md5, create_multipart_related
 
 from transaction_history import Transaction_History
 from service_document import ServiceDocument
 from deposit_receipt import Deposit_Receipt
 from error_document import Error_Document
-from collection import Sword_Statement
+from statement import Atom_Sword_Statement, Ore_Sword_Statement
 from exceptions import *
 
 from compatible_libs import etree
 
-import httplib2
+# import httplib2
+import http_layer
 
 class Connection(object):
     """
@@ -125,7 +126,9 @@ Please see the testsuite for this class for more examples of the sorts of transa
                        cache_deposit_receipts=True,
                        honour_receipts=True,
                        error_response_raises_exceptions=True,
-                       always_authenticate=False):
+                       
+                       # http layer implementation if different from default
+                       http_impl=None):
         """
 Creates a new Connection object.
 
@@ -175,13 +178,6 @@ Parameters:
                 #   If set to False - A `sword2.error_document:Error_Document` object will be returned.
                 
                 error_response_raises_exceptions=True
-
-                # Some web servers redirect to a login page rather than
-                # doing a HTTP challenge when authentication is needed.
-                # Set the always_authenticate flag to always include basic
-                # HTTP authentication headers in requests.
-
-                always_authenticate=False
                 )
                 
 If a `Connection` is created with the parameter `download_service_document` set to `False`, then no attempt
@@ -213,10 +209,17 @@ Loading in a locally held Service Document:
         # return - No Exception will be raised!
         # Check Error_Document.code to get the response code, regardless to whether a valid Sword2 error document was received.
         self.raise_except = error_response_raises_exceptions
-        self.always_authenticate = always_authenticate
         
         self.keep_cache = cache_deposit_receipts
-        self.h = httplib2.Http(".cache", timeout=30.0)
+        
+        # set the http layer
+        if http_impl is None:
+            conn_l.info("Loading default HTTP layer")
+            self.h = http_layer.HttpLib2Layer(".cache", timeout=30.0)
+        else:
+            conn_l.info("Using provided HTTP layer")
+            self.h = http_impl
+        
         self.user_name = user_name
         self.on_behalf_of = on_behalf_of
         
@@ -254,11 +257,8 @@ Loading in a locally held Service Document:
         if self.raise_except:
             raise cls(resp)
         else:
-            content_type = resp['content-type']
-            pos = content_type.find(';')
-            if pos != -1:
-                content_type = content_type[:pos].strip()
-            if content_type in ['text/xml', 'application/xml']:
+            # content type can contain both the mimetype and the charset (e.g. text/xml; charset=utf-8)
+            if resp['content-type'].startswith("text/xml") or resp['content-type'].startswith("application/xml"):
                 conn_l.info("Returning an error document, due to HTTP response code %s" % resp.status)
                 e = Error_Document(content, code=resp.status, resp = resp)
                 return e
@@ -279,6 +279,9 @@ Loading in a locally held Service Document:
         
         404 - Not Found.
             Will throw a `sword2.exceptions.NotFound` exception
+            
+        406 - Not Acceptable.
+            Will throw a `sword2.exceptions.NotAcceptable` exception
         
         408 - Request Timeout
             Will throw a `sword2.exceptions.RequestTimeOut` exception
@@ -289,13 +292,16 @@ Loading in a locally held Service Document:
         4XX not listed:
             Will throw a general `sword2.exceptions.HTTPResponseError` exception
         """
-        if resp['status'] == "401":
+        if resp['status'] == 401:
             conn_l.error("You are unauthorised (401) to access this document on the server. Check your username/password credentials and your 'On Behalf Of'")
             return self._return_error_or_exception(NotAuthorised, resp, content)
-        elif resp['status'] == "403":
+        elif resp['status'] == 403:
             conn_l.error("You are Forbidden (401) to POST to '%s'. Check your username/password credentials and your 'On Behalf Of'")
             return self._return_error_or_exception(Forbidden, resp, content)
-        elif resp['status'] == "408":
+        elif resp['status'] == 406:
+            conn_l.error("Cannot negotiate for desired format/packaging on '%s'.")
+            return self._return_error_or_exception(NotAcceptable, resp, content)
+        elif resp['status'] == 408:
             conn_l.error("Request Timeout (408) - error uploading.")
             return self._return_error_or_exception(RequestTimeOut, resp, content)
         elif int(resp['status']) > 499:
@@ -369,42 +375,29 @@ Loading in a locally held Service Document:
                                  sd_iri = self.sd_iri,
                                  valid = self.sd.valid,
                                  process_duration = took_time)
-
-    def _init_http_request_headers(self):
-        """Initialize the HTTP request headers."""
-        headers = {}
-
-        if self.always_authenticate:
-            # Always do basic HTTP authentication to the server. This
-            # is useful for servers that do a HTTP redirect for
-            # unauthenticated users.
-            cred_list = self.h.credentials.credentials
-            if len(cred_list) > 0:
-                import base64
-                headers['Authorization'] = 'Basic ' + base64.b64encode(cred_list[0][1] + ':' + cred_list[0][2])
-
-        return headers
     
     def get_service_document(self):
         """Perform an HTTP GET on the Service Document IRI (SD-IRI) and attempt to parse the result as
         a SWORD2 Service Document (using `self.load_service_document`)
         """
-        headers = self._init_http_request_headers()
+        headers = {}
         if self.on_behalf_of:
             headers['on-behalf-of'] = self.on_behalf_of
         self._t.start("SD_URI request")
-        resp, content = curl_request(self.h, self.sd_iri, "GET", headers=headers)
+        resp, content = self.h.request(self.sd_iri, "GET", headers=headers)
         _, took_time = self._t.time_since_start("SD_URI request")
         if self.history:
             self.history.log('SD_IRI GET', 
                              sd_iri = self.sd_iri,
                              response = resp, 
                              process_duration = took_time)
-        if resp['status'] == "200":
+        if resp['status'] == 200:
             conn_l.info("Received a document for %s" % self.sd_iri)
             self.load_service_document(content)
-        elif resp['status'] == "401":
+        elif resp['status'] == 401:
             conn_l.error("You are unauthorised (401) to access this document on the server. Check your username/password credentials")
+        else:
+            conn_l.error("Unexpected response status: " + str(resp['status']))
         
     def reset_transaction_history(self):
         """ Clear the transaction history - `self.history`"""
@@ -417,6 +410,7 @@ Loading in a locally held Service Document:
                       mimetype=None,      
                       filename=None,
                       packaging=None,
+                      md5sum=None,
                         
                       metadata_entry=None,  # a sword2.Entry needs to be here, if 
                                               # a metadata entry is to be uploaded
@@ -432,8 +426,7 @@ Loading in a locally held Service Document:
                       empty = None,     # If this is True, then the POST/PUT is sent with an empty body
                                         # and the 'Content-Length' header explicitly set to 0
                       method = "POST",
-                      request_type="",       # text label for transaction history reports
-                      additional_headers = {},
+                      request_type=""       # text label for transaction history reports
                       ):
         """Performs an HTTP request, as defined by the parameters. This is an internally used method and it is best that it
         is not called directly.
@@ -484,37 +477,38 @@ Loading in a locally held Service Document:
         response_headers, etc)
         """
         if payload:
-            md5sum, f_size = get_md5(payload)
+            md5, f_size = get_md5(payload)
+            # this allows the user to pass in their own md5sum (this doesn't save
+            # any time, though, because of the above operation - useful mainly for
+            # testing at this stage
+            if md5sum is None:
+                md5sum = md5
         
         # request-level headers
-        headers = self._init_http_request_headers()
-        headers.update(additional_headers)
+        headers = {}
         headers['In-Progress'] = str(in_progress).lower()
         if on_behalf_of:
-            headers['On-Behalf-Of'] = self.on_behalf_of
+            headers['On-Behalf-Of'] = on_behalf_of
         elif self.on_behalf_of:
             headers['On-Behalf-Of'] = self.on_behalf_of
             
         if suggested_identifier:
             headers['Slug'] = str(suggested_identifier)
             
-        if suggested_identifier:
-            headers['Slug'] = str(suggested_identifier)
-        
         if metadata_relevant:
             headers['Metadata-Relevant'] = str(metadata_relevant).lower()
         
         if hasattr(payload, 'read'):
             # Need to work out why a 401 challenge will stop httplib2 from sending the file...
             # likely need to make it re-seek to 0...
-            # In the meantime, read the file into memory... *sigh*
+            # FIXME: In the meantime, read the file into memory... *sigh*
             payload = payload.read()
         
         self._t.start(request_type)
         if empty:
             # NULL body with explicit zero length.
             headers['Content-Length'] = "0"
-            resp, content = curl_request(self.h, target_iri, method, headers=headers)
+            resp, content = self.h.request(target_iri, method, headers=headers)
             _, took_time = self._t.time_since_start(request_type)
             if self.history:
                 self.history.log(request_type + ": Empty request", 
@@ -525,7 +519,7 @@ Loading in a locally held Service Document:
                                  headers = headers,
                                  process_duration = took_time)  
         elif method == "DELETE":
-            resp, content = curl_request(self.h, target_iri, method, headers=headers)
+            resp, content = self.h.request(target_iri, method, headers=headers)
             _, took_time = self._t.time_since_start(request_type)
             if self.history:
                 self.history.log(request_type + ": DELETE request", 
@@ -541,7 +535,8 @@ Loading in a locally held Service Document:
             headers['Content-Type'] = "application/atom+xml;type=entry"
             data = str(metadata_entry)
             headers['Content-Length'] = str(len(data))
-            resp, content = curl_request(self.h, target_iri, method, headers=headers, body = data)
+            
+            resp, content = self.h.request(target_iri, method, headers=headers, body = data)
             _, took_time = self._t.time_since_start(request_type)
             if self.history:
                 self.history.log(request_type + ": Metadata-only resource request", 
@@ -554,6 +549,9 @@ Loading in a locally held Service Document:
             
         elif metadata_entry and filename and payload:
             # Multipart resource creation
+            my_headers = {"Content-MD5" : str(md5sum)}
+            if packaging is not None:
+                my_headers['Packaging'] = str(packaging)
             multicontent_type, payload_data = create_multipart_related([{'key':'atom',
                                                                     'type':'application/atom+xml; charset="utf-8"',
                                                                     'data':str(metadata_entry),  # etree default is utf-8
@@ -562,15 +560,13 @@ Loading in a locally held Service Document:
                                                                     'type':str(mimetype),
                                                                     'filename':filename,
                                                                     'data':payload,  
-                                                                    'headers':{'Content-MD5':str(md5sum),
-                                                                               'Packaging':str(packaging),
-                                                                               }
+                                                                    'headers':my_headers
                                                                     }
                                                                    ])
                                                                    
             headers['Content-Type'] = multicontent_type + '; type="application/atom+xml"'
             headers['Content-Length'] = str(len(payload_data))    # must be str, not int type
-            resp, content = curl_request(self.h, target_iri, method, headers=headers, body = payload_data)
+            resp, content = self.h.request(target_iri, method, headers=headers, body = payload_data)
             _, took_time = self._t.time_since_start(request_type)
             if self.history:
                 self.history.log(request_type + ": Multipart resource request",
@@ -595,9 +591,10 @@ Loading in a locally held Service Document:
             headers['Content-MD5'] = str(md5sum)
             headers['Content-Length'] = str(f_size)
             headers['Content-Disposition'] = "attachment; filename=%s" % filename   # TODO: ensure filename is ASCII
-            headers['Packaging'] = str(packaging)
+            if packaging is not None:
+                headers['Packaging'] = str(packaging)
             
-            resp, content = curl_request(self.h, target_iri, method, headers=headers, body = payload)
+            resp, content = self.h.request(target_iri, method, headers=headers, body = payload)
             _, took_time = self._t.time_since_start(request_type)
             if self.history:
                 self.history.log(request_type + ": simple resource request",
@@ -611,7 +608,7 @@ Loading in a locally held Service Document:
             conn_l.error("Parameters were not complete: requires a metadata_entry, or a payload/filename/packaging or both")
             raise Exception("Parameters were not complete: requires a metadata_entry, or a payload/filename/packaging or both")
         
-        if resp['status'] == "201":
+        if resp['status'] == 201:
             #   Deposit receipt in content
             conn_l.info("Received a Resource Created (201) response.")
             # Check response headers for updated Location IRI
@@ -634,13 +631,13 @@ Loading in a locally held Service Document:
                 d.code = 201
                 d.location = location
                 return d
-        elif resp['status'] == "204":
+        elif resp['status'] == 204:
             #   Deposit receipt in content
             conn_l.info("Received a valid 'No Content' (204) response.")
             location = resp.get('location', None)
             # Check response headers for updated Locatio
             return Deposit_Receipt(response_headers = dict(resp), location=location, code=204)
-        elif resp['status'] == "200":
+        elif resp['status'] == 200:
             #   Deposit receipt in content
             conn_l.info("Received a valid (200) OK response.")
             content_type = resp.get('content-type')
@@ -661,6 +658,7 @@ Loading in a locally held Service Document:
                 d.response_headers = dict(resp)
                 d.location = location
                 d.content = content
+                d.code = 200
                 return d
         else:
             return self._handle_error_response(resp, content)
@@ -676,6 +674,7 @@ Loading in a locally held Service Document:
                         mimetype=None,      
                         filename=None,
                         packaging=None,
+                        md5sum=None,               # optional; will be calculated for you otherwise
                         
                         metadata_entry=None,  # a sword2.Entry needs to be here, if 
                                               # a metadata entry is to be uploaded
@@ -684,9 +683,8 @@ Loading in a locally held Service Document:
                         # related upload.
                         
                         suggested_identifier=None,
-                        in_progress=True,
+                        in_progress=False,
                         on_behalf_of=None,
-                        additional_headers={},
                         ):
         """
 Creating a Resource
@@ -840,13 +838,14 @@ The SWORD server is not required to support packaging formats, but this profile 
                                   on_behalf_of=on_behalf_of,
                                   method="POST",
                                   request_type='Col_IRI POST',
-                                  additional_headers=additional_headers)
+                                  md5sum=md5sum)
         
     def update(self, metadata_entry = None,    # required for a metadata update
                              payload = None,            # required for a file update      
                              filename = None,           # required for a file update
                              mimetype=None,             # required for a file update
                              packaging=None,            # required for a file update
+                             md5sum=None,               # optional; will be calculated for you otherwise
                              
                              dr = None,     # Important! Without this, you will have to set the edit_iri AND the edit_media_iri parameters.
                              
@@ -856,7 +855,6 @@ The SWORD server is not required to support packaging formats, but this profile 
                              metadata_relevant=False,
                              in_progress=False,
                              on_behalf_of=None,
-                             additional_headers={},
                       ):
         """
 Replacing the Metadata and/or Files of a Resource
@@ -925,6 +923,7 @@ response_headers, etc)
         target_iri = None
         request_type = "Update PUT"
         if metadata_entry != None:
+            metadata_relevant = True    # set this definitively, although the server shouldn't actually care
             # Metadata or Metadata + file --> Edit-IRI
             conn_l.info("Using the Edit-IRI - Metadata or Metadata + file multipart-related uses a PUT request to the Edit-IRI")
             if payload != None and filename != None:
@@ -966,7 +965,7 @@ response_headers, etc)
                                   metadata_relevant=str(metadata_relevant),
                                   method="PUT",
                                   request_type=request_type,
-                                  additional_headers=additional_headers)
+                                  md5sum=md5sum)
 
 
         
@@ -976,12 +975,12 @@ response_headers, etc)
                         filename,      # According to spec, "The client MUST supply a Content-Disposition header with a filename parameter 
                                        #                     (note that this requires the filename be expressed in ASCII)."  
                         mimetype=None,
-                        
+                        packaging=None,
+                        md5sum=None,               # optional; will be calculated for you otherwise
                         
                         on_behalf_of=None,
                         in_progress=False, 
-                        metadata_relevant=False,
-                        additional_headers={},
+                        metadata_relevant=False
                         ):
         """
 Adding Files to the Media Resource
@@ -1024,13 +1023,14 @@ response_headers, etc)
         return self._make_request(target_iri = edit_media_iri,
                                   payload=payload,
                                   mimetype=mimetype,
+                                  packaging=packaging,
                                   filename=filename,
                                   on_behalf_of=on_behalf_of,
                                   in_progress=in_progress,
                                   method="POST",
                                   metadata_relevant=metadata_relevant,
                                   request_type='EM_IRI POST (APPEND)',
-                                  additional_headers=additional_headers)
+                                  md5sum=md5sum)
 
     def append(self, 
                         se_iri = None,  
@@ -1040,12 +1040,13 @@ response_headers, etc)
                                             #                     (note that this requires the filename be expressed in ASCII)."
                         mimetype = None,
                         packaging = None,
+                        md5sum=None,               # optional; will be calculated for you otherwise
+                        
                         on_behalf_of = None,
                         metadata_entry = None,
                         metadata_relevant = False,
                         in_progress = False,
-                        dr = None,
-                        additional_headers={},
+                        dr = None
                         ):
         """
 Adding Content to a Resource
@@ -1180,13 +1181,12 @@ response_headers, etc)
                                   method="POST",
                                   metadata_relevant=metadata_relevant,
                                   request_type='SE_IRI POST (APPEND PKG)',
-                                  additional_headers=additional_headers)
+                                  md5sum=md5sum)
 
 
     def delete(self,
                         resource_iri,
-                        on_behalf_of=None,
-                        additional_headers={}):
+                        on_behalf_of=None):
         """
 Delete resource
 
@@ -1199,7 +1199,7 @@ Can be given the optional parameter of `on_behalf_of`.
                                   on_behalf_of=on_behalf_of,
                                   method="DELETE",
                                   request_type='IRI DELETE',
-                                  additional_headers=additional_headers)
+                                  in_progress=False)
 
     def delete_content_of_resource(self, edit_media_iri = None,
                                          on_behalf_of = None,
@@ -1240,7 +1240,7 @@ and the correct IRI will automatically be chosen.
         else:
             conn_l.info("Deleting Resource via Edit-Media-IRI %s" % edit_media_iri)
 
-        return self.delete_resource(edit_media_iri,
+        return self.delete(edit_media_iri,
                                     on_behalf_of = on_behalf_of)
 
 
@@ -1287,14 +1287,13 @@ and the correct IRI will automatically be chosen.
         else:
             conn_l.info("Deleting Container via Edit-IRI %s" % edit_iri)
 
-        return self.delete_resource(edit_iri,
+        return self.delete(edit_iri,
                                     on_behalf_of = on_behalf_of)
             
     def complete_deposit(self,
                         se_iri = None,
                         on_behalf_of=None,
-                        dr = None,
-                        additional_headers={}):
+                        dr = None):
         """
 Completing a Previously Incomplete Deposit
 
@@ -1337,8 +1336,7 @@ and the correct IRI will automatically be chosen.
                                   in_progress='false',
                                   method="POST",
                                   empty=True,
-                                  request_type='SE_IRI Complete Deposit',
-                                  additional_headers=additional_headers)
+                                  request_type='SE_IRI Complete Deposit')
 
     def update_files_for_resource(self, 
                         payload,       # These need to be set to upload a file      
@@ -1346,6 +1344,7 @@ and the correct IRI will automatically be chosen.
                                        #                     (note that this requires the filename be expressed in ASCII)."
                         mimetype=None,
                         packaging=None,
+                        md5sum=None,               # optional; will be calculated for you otherwise
                         
                         edit_media_iri = None,
                         
@@ -1353,8 +1352,7 @@ and the correct IRI will automatically be chosen.
                         in_progress=False, 
                         metadata_relevant=False,
                         # Pass back the deposit receipt to automatically get the right IRI to use
-                        dr = None,
-                        additional_headers={},
+                        dr = None
                         ):
         """
 Replacing the File Content of a Resource
@@ -1428,14 +1426,14 @@ response_headers, etc)
                                   method="PUT",
                                   metadata_relevant=str(metadata_relevant),
                                   request_type='EM_IRI PUT',
-                                  additional_headers=additional_headers)
+                                  md5sum=md5sum)
 
     def update_metadata_for_resource(self, metadata_entry,    # required
                                            edit_iri = None,
                                            in_progress=False,
                                            on_behalf_of=None,
-                                           dr = None,
-                                           additional_headers={}):
+                                           dr = None
+                                           ):
         """
 Replacing the Metadata of a Resource
 
@@ -1511,8 +1509,7 @@ response_headers, etc)
                                   on_behalf_of=on_behalf_of,
                                   in_progress=in_progress, 
                                   method="PUT",
-                                  request_type='Edit_IRI PUT',
-                                  additional_headers=additional_headers)
+                                  request_type='Edit_IRI PUT')
 
     def update_metadata_and_files_for_resource(self, metadata_entry,    # required
                                                      payload,       # These need to be set to upload a file      
@@ -1520,14 +1517,14 @@ response_headers, etc)
                                                                     #                     (note that this requires the filename be expressed in ASCII)."
                                                      mimetype=None,
                                                      packaging=None,
+                                                     md5sum=None,               # optional; will be calculated for you otherwise
                                                      
                                                      edit_iri = None,
                         
                                                      metadata_relevant=False,
                                                      in_progress=False,
                                                      on_behalf_of=None,
-                                                     dr = None,
-                                                     additional_headers={},
+                                                     dr = None
                                               ):
         """
 Replacing the Metadata and Files of a Resource
@@ -1614,8 +1611,55 @@ response_headers, etc)
                                   metadata_relevant=str(metadata_relevant),
                                   method="PUT",
                                   request_type='Edit_IRI PUT',
-                                  additional_headers=additional_headers)
+                                  md5sum=md5sum)
 
+
+    def get_deposit_receipt(self, edit_iri):
+        """
+Getting a copy of the Entry Document/Deposit Receipt
+
+FIXME: this explicitly requests the receipt from the server, but there is a
+cache of deposit receipts - how should we access this?
+
+FIXME: there's also something funny going on with get_resource remembering
+old headers, but not quite sure where that's coming from.  Have to pass in
+packaging and headers explicitly to overcome
+        """
+        conn_l.debug("Trying to GET the ATOM Entry Document at %s." % edit_iri)
+        response = self.get_resource(edit_iri, packaging=None, headers={})
+        if response.code == 200:
+            conn_l.debug("Attempting to parse the response as a Deposit Receipt")
+            d = Deposit_Receipt(xml_deposit_receipt = response.content)
+            if d.parsed:
+                conn_l.info("Server responsed with a Deposit Receipt. Caching a copy in .resources['%s']" % d.edit)
+            d.response_headers = dict(response.response_headers)
+            d.code = 200
+            self._cache_deposit_receipt(d)
+            return d
+        elif response.code == 404:
+            d = Deposit_Receipt()
+            d.code = 404
+            return d
+
+    def get_ore_sword_statement(self, sword_statement_iri):
+        """
+Getting the Sword Statement.
+
+IN PROGRESS - USE AT OWN RISK.... see `sword2.Sword_Statement`.
+        """
+        # get the statement first
+        conn_l.debug("Trying to GET the ORE Sword Statement at %s." % sword_statement_iri)
+        response = self.get_resource(sword_statement_iri, headers = {'Accept':'application/rdf+xml'})
+        if response.code == 200:
+            #try:
+            if True:
+                conn_l.debug("Attempting to parse the response as a ORE Sword Statement")
+                s = Ore_Sword_Statement(response.content)
+                conn_l.debug("Parsed SWORD2 Statement, returning")
+                return s
+            #except Exception, e:
+            #    # Any error here is to do with the parsing
+            #    return response.content
 
     def get_atom_sword_statement(self, sword_statement_iri):
         """
@@ -1630,7 +1674,7 @@ IN PROGRESS - USE AT OWN RISK.... see `sword2.Sword_Statement`.
             #try:
             if True:
                 conn_l.debug("Attempting to parse the response as a ATOM Sword Statement")
-                s = Sword_Statement(response.content)
+                s = Atom_Sword_Statement(response.content)
                 conn_l.debug("Parsed SWORD2 Statement, returning")
                 return s
             #except Exception, e:
@@ -1675,11 +1719,6 @@ Response:
         `ContentWrapper.code`    -- status code ('200' on success.)
 
         """
-                
-        all_headers = self._init_http_request_headers()
-        all_headers.update(headers)
-        headers = all_headers
-
         if not content_iri:
             if dr != None:
                 conn_l.info("Using the deposit receipt to get the SWORD2-Edit-IRI")
@@ -1703,7 +1742,7 @@ Response:
                     conn_l.error("Desired packaging format '%' not available from the server, according to the deposit receipt. Change the client parameter 'honour_receipts' to False to avoid this check.")
                     return self._return_error_or_exception(PackagingFormatNotAvailable, {}, "")
         if on_behalf_of:
-            headers['On-Behalf-Of'] = self.on_behalf_of
+            headers['On-Behalf-Of'] = on_behalf_of
         elif self.on_behalf_of:
             headers['On-Behalf-Of'] = self.on_behalf_of
         if packaging:
@@ -1714,7 +1753,8 @@ Response:
             conn_l.info("IRI GET resource '%s' with Accept-Packaging:%s" % (content_iri, packaging))
         else:
             conn_l.info("IRI GET resource '%s'" % content_iri)
-        resp, content = curl_request(self.h, content_iri, "GET", headers=headers)
+        conn_l.debug("Using headers: " + str(headers))
+        resp, content = self.h.request(content_iri, "GET", headers=headers)
         _, took_time = self._t.time_since_start("IRI GET resource")
         if self.history:
             self.history.log('Cont_IRI GET resource', 
@@ -1726,8 +1766,8 @@ Response:
                              headers = headers,
                              process_duration = took_time)
         conn_l.info("Server response: %s" % resp['status'])
-        conn_l.debug(resp)
-        if resp['status'] == '200':
+        conn_l.debug(dict(resp))
+        if resp['status'] == 200:
             conn_l.debug("Cont_IRI GET resource successful - got %s bytes from %s" % (len(content), content_iri))
             class ContentWrapper(object):
                 def __init__(self, resp, content):
@@ -1735,9 +1775,10 @@ Response:
                     self.content = content
                     self.code = resp.status
             return ContentWrapper(resp, content)
-        elif resp['status'] == '408':   # Unavailable packaging format 
-            conn_l.error("Desired packaging format '%' not available from the server.")
-            return self._return_error_or_exception(PackagingFormatNotAvailable, resp, content)
+        # NOTE: let the core error handling deal with this
+        #elif resp['status'] == 406:   # Unavailable packaging format 
+        #    conn_l.error("Desired packaging format '%' not available from the server.")
+        #    return self._return_error_or_exception(PackagingFormatNotAvailable, resp, content)
         else:
             return self._handle_error_response(resp, content)
 

@@ -18,9 +18,6 @@ from atom_objects import Category
 from compatible_libs import etree
 from utils import NS, get_text
 
-NS = dict(NS)
-NS['sword'] = "{http://purl.org/net/sword/}%s"
-
 class Deposit_Receipt(object):
     def __init__(self, xml_deposit_receipt=None, dom=None, response_headers={}, location=None, code=0):
         """
@@ -101,7 +98,9 @@ Availible attributes:
     
     `self.location`         -- The location, if given (from HTTP Header: "Location: ....")
     """
+        self.dom = None     # this will be populated below
         self.parsed = False
+        self.valid = False
         self.response_headers=response_headers
         self.location = location
         self.content = None
@@ -113,6 +112,8 @@ Availible attributes:
         self.edit_media_feed = None
         self.alternate = None
         self.se_iri = None 
+        self.atom_statement_iri = None
+        self.ore_statement_iri = None
         # Atom convenience attribs
         self.title = None
         self.id = None
@@ -120,23 +121,70 @@ Availible attributes:
         self.summary = None
         
         self.packaging = []
-        self.treatment = None
         self.categories = []
         self.content = {}
         self.cont_iri = None
         
+        # first construct or set the dom
         if xml_deposit_receipt:
             try:
                 self.dom = etree.fromstring(xml_deposit_receipt)
-                self.parsed = True
+                self.parsed = True    
             except Exception, e:
                 d_l.error("Was not able to parse the deposit receipt as XML.")
                 return
-            self.handle_metadata()
         elif dom != None:
             self.dom = dom
             self.parsed = True
+        
+        # allow for the possibility that we are not given a body for the deposit
+        # receipt (explicitly allowed by the spec)
+        if self.dom != None:
+            # now validate the deposit receipt
+            # Validation doesn't stop anything happening, it just lets the client
+            # user know what to expect (note that Error_Document sub classes Deposit_Receipt
+            # and that will almost always fail the validation)
+            self.valid = self.validate()
+            d_l.info("Initial SWORD2 validation checks on deposit receipt - Valid document? %s" % self.valid)
+            
+            # finally, handle the metadata
             self.handle_metadata()
+    
+    def validate(self):
+        valid = True
+        
+        # LINK REQUIREMENTS
+        
+        # It MUST contain a Media Entry IRI (Edit-IRI), defined by atom:link@rel="edit"
+        has_edit = False
+        # It MUST contain a Media Resource IRI (EM-IRI), defined by atom:link@rel="edit-media"
+        has_em = False
+        # It MUST contain a SWORD Edit IRI (SE-IRI), defined by atom:link@rel=""" 
+        # which MAY be the same as the Edit-IRI
+        has_se = False
+        
+        links = self.dom.findall(NS['atom'] % "link")
+        for link in links:
+            rel = link.get("rel")
+            if rel == "edit":
+                has_edit = True
+            elif rel == "edit-media":
+                has_em = True
+            elif rel == "http://purl.org/net/sword/terms/add":
+                has_se = True
+        
+        if not has_edit or not has_em or not has_se:
+            d_l.debug("Validation Fail: has_edit: " + str(has_edit) + "; has_em: " + str(has_em) + "; has_se: " + str(has_se))
+            valid = False
+        
+        # It MUST contain a single sword:treatment element [SWORD003] which contains either a human-readable 
+        # statement describing treatment the deposited resource has received or a IRI that dereferences to such a description.
+        treatment = self.dom.findall(NS['sword'] % "treatment")
+        if treatment == None or len(treatment) == 0:
+            d_l.debug("Validation Fail: no treatment or treatment invalid: " + str(treatment))
+            valid = False
+        
+        return valid
     
     def handle_metadata(self):
         """Method that walks the `etree.SubElement`, assigning the information to the objects attributes."""
@@ -155,13 +203,9 @@ Availible attributes:
                             if not e.text:
                                 e.text = ""
                             e.text += " %s:\"%s\"" % (ak, av)
-                        self.metadata[field] = e.text.strip()
+                        self.metadata[field] = [e.text.strip()]
                     elif field == "sword_packaging":
                         self.packaging.append(e.text)
-                    elif field == "sword_treatment":
-                        # Special case since the sword:treatment might contain child tags
-                        body = etree.tounicode(e, with_tail=False)
-                        self.treatment = body[body.find('>')+1:body.rfind('<')]
                     else:
                         if field == "atom_title":
                             self.title = e.text
@@ -177,9 +221,9 @@ Availible attributes:
                             if isinstance(self.metadata[field], list):
                                 self.metadata[field].append(e.text)
                             else:
-                                self.metadata[field] = [self.metadata[field], e.text]
+                                self.metadata[field] += [e.text]
                         else:
-                            self.metadata[field] = e.text
+                            self.metadata[field] = [e.text]
                     
     def handle_link(self, e):
         """Method that handles the intepreting of <atom:link> element information and placing it into the anticipated attributes."""
@@ -199,6 +243,13 @@ Availible attributes:
                 self.se_iri = e.attrib.get('href', None)
             elif rel == "alternate":
                 self.alternate = e.attrib.get('href', None)
+            elif rel == "http://purl.org/net/sword/terms/statement":
+                t = e.attrib.get("type")
+                if t is not None and t == "application/atom+xml;type=feed":
+                    self.atom_statement_iri = e.attrib.get('href', None)
+                elif t is not None and t == "application/rdf+xml":
+                    self.ore_statement_iri = e.attrib.get('href', None)
+                    
             # Put all links into .links attribute, with all element attribs
             attribs = {}
             for k,v in e.attrib.iteritems():
@@ -239,11 +290,9 @@ Availible attributes:
         if self.se_iri:
             _s.append("SWORD2 Add IRI: %s" % self.se_iri)
         for c in self.categories:
-            _s.append(unicode(c))
+            _s.append(str(c))
         if self.packaging:
             _s.append("SWORD2 Package formats available: %s" % self.packaging)
-        if self.treatment:
-            _s.append("SWORD2 Treatment: %s" % self.treatment)
         if self.alternate:
             _s.append("Alternate IRI: %s" % self.alternate)
         for k, v in self.links.iteritems():

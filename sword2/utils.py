@@ -13,8 +13,6 @@ from datetime import datetime
 
 from base64 import b64encode
 
-from mimetools import Message
-
 try:
     from hashlib import md5
 except ImportError:
@@ -27,6 +25,8 @@ NS['dcterms'] = "{http://purl.org/dc/terms/}%s"
 NS['sword'] ="{http://purl.org/net/sword/terms/}%s"
 NS['atom'] = "{http://www.w3.org/2005/Atom}%s"
 NS['app'] = "{http://www.w3.org/2007/app}%s"
+NS['rdf'] = "{http://www.w3.org/1999/02/22-rdf-syntax-ns#}%s"
+NS['ore'] = "{http://www.openarchives.org/ore/terms/}%s"
 
 def get_text(parent, tag, plural = False):
     """Takes an `etree.Element` and a tag name to search for and retrieves the text attribute from any
@@ -186,181 +186,38 @@ def create_multipart_related(payloads):
     SWORD2 multipart POST/PUT expects two attachments - key = 'atom' w/ Atom Entry (metadata)
                                                         key = 'payload' (file)
     """
-
-    from email.MIMEMultipart import MIMEMultipart
-    from email.MIMEBase import MIMEBase
-    from email import Encoders
-
-    # Build multi-part message
-    multipart = MIMEMultipart('related')
-    for payload in payloads:
-        # Create new part from its mimetype
-        mimetype = payload.get('type')
-        if mimetype is None:
-            mimetype = get_content_type(payload.get("filename"))
-        part = MIMEBase(*(mimetype.split('/')))
-
-        # Set the name and filename of the payload
+    # Generate random boundary code
+    # TODO check that it does not occur in the payload data
+    bhash = md5(datetime.now().isoformat()).hexdigest()    # eg 'd8bb3ea6f4e0a4b4682be0cfb4e0a24e'
+    BOUNDARY = '===========%s_$' % bhash
+    CRLF = '\r\n'   # As some servers might barf without this.
+    body = []
+    for payload in payloads:   # predicatable ordering...
+        body.append('--' + BOUNDARY)
+        if payload.get('type', None):
+            body.append('Content-Type: %(type)s' % payload)
+        else:
+            body.append('Content-Type: %s' % get_content_type(payload.get("filename")))
+            
         if payload.get('filename', None):
-            part.add_header('Content-Disposition', 'attachment',
-                            name=payload['key'], filename=payload['filename'])
+            body.append('Content-Disposition: attachment; name="%(key)s"; filename="%(filename)s"' % (payload))
         else:
-            part.add_header('Content-Disposition', 'attachment',
-                            name=payload['key'])
-
-        # Set additional headers
+            body.append('Content-Disposition: attachment; name="%(key)s"' % (payload))
+        
         if payload.has_key("headers"):
-            for k, v in payload['headers'].iteritems():
-                part.add_header(k, v)
-
-        # Attach payload
-        part.set_payload(payload['data'])
+            for f,v in payload['headers'].iteritems():
+                body.append("%s: %s" % (f, v))     # TODO force ASCII?
+        
+        body.append('MIME-Version: 1.0')
         if payload['key'] == 'payload':
-            Encoders.encode_base64(part)
-
-        multipart.attach(part)
-
-    # Determine multi-part content type
-    message_body = multipart.as_string(unixfrom=False)
-    substr = 'content-type: '
-    assert message_body[:len(substr)].lower() == substr.lower()
-    stop = message_body.find('\n')
-    content_type = message_body[len(substr):stop].strip()
-    while content_type[-1] == ';':
-        start = stop+1
-        stop = message_body.find('\n', start)
-        content_type += message_body[start:stop].strip()
-
-    return content_type, message_body
-
-def curl_request(http_object, uri, method='GET', body=None, headers=None, redirections=5, connection_type=None):
-    """
-    request(self, uri, method='GET', body=None, headers=None, redirections=5, connection_type=None)
-        Performs a single HTTP request.
-        The 'uri' is the URI of the HTTP resource and can begin 
-        with either 'http' or 'https'. The value of 'uri' must be an absolute URI.
-        
-        The 'method' is the HTTP method to perform, such as GET, POST, DELETE, etc. 
-        There is no restriction on the methods allowed.
-        
-        The 'body' is the entity body to be sent with the request. It is a string
-        object.
-        
-        Any extra headers that are to be sent with the request should be provided in the
-        'headers' dictionary.
-        
-        The maximum number of redirect to follow before raising an 
-        exception is 'redirections. The default is 5.
-        
-        The return value is a tuple of (response, content), the first 
-        being and instance of the 'Response' class, the second being 
-        a string that contains the response entity body.
-    """
-
-    import pycurl, httplib2, StringIO
-
-    iHttpObject = http_object
-    iUri = uri
-    iMethod = method
-    iBody = body
-    iHeaders = headers
-    iRedirections = redirections
-    iConnectionType = connection_type
-
-    if (iMethod == 'GET') and (iBody is None):
-        curl = pycurl.Curl()
-        curl.setopt(curl.URL, str(iUri))
-        curl.setopt(curl.HTTPGET, 1)
-        curl.setopt(curl.VERBOSE, 0) # Change for verbose / debug output
-        curl.setopt(curl.HTTPHEADER, [(k + ': ' + v) for k,v in iHeaders.iteritems()])
-        
-        # Create stream for response headers and data
-        response_headers = StringIO.StringIO()
-        curl.setopt(curl.HEADERFUNCTION, response_headers.write)
-        response_data = StringIO.StringIO()
-        curl.setopt(curl.WRITEFUNCTION, response_data.write)
-
-        curl.perform()
-
-        # Build response
-        response_headers.seek(0)
-        headers = response_headers.read().strip()
-        if '\r\n' in headers:
-            headers = headers.split('\r\n')
+            body.append('Content-Transfer-Encoding: base64')
+            body.append('')
+            body.append(b64encode(payload['data']))
         else:
-            headers = headers.split('\n')
-        http_response = headers[0].split(None, 2)
-        del headers[0]
-        headers = [(x[0].lower(), x[1]) for x in [x.split(': ') for x in headers]]
-        if http_response[0][:5].lower() != 'http/':
-            raise ValueError, "Invalid http response from cURL."
-        version = {'1.0': 10, '1.1': 11}[http_response[0][5:]]
-        status = http_response[1]
-        reason = http_response[2]
-        headers.append(('status', status))
-        return_headers = httplib2.Response(dict(headers))
-        return_headers.version = version
-        return_headers.status = int(status)
-        return_headers.reason = reason
-
-        response_data.seek(0)
-        return_content = response_data.read()
-        curl.close()
-
-        return return_headers, return_content
-    elif (iMethod == 'POST') and (iBody is not None):
-        curl = pycurl.Curl()
-        curl.setopt(curl.URL, str(iUri))
-        curl.setopt(curl.POST, 1)
-
-        # Create stream for transmission
-        stream = StringIO.StringIO(iBody)
-        curl.setopt(curl.READFUNCTION, stream.read)
-
-        curl.setopt(curl.VERBOSE, 0) # Change for verbose / debug output
-        curl.setopt(curl.HTTPHEADER, [(k + ': ' + v) for k,v in iHeaders.iteritems()])
-
-        # Create stream for response headers and data
-        response_headers = StringIO.StringIO()
-        curl.setopt(curl.HEADERFUNCTION, response_headers.write)
-        response_data = StringIO.StringIO()
-        curl.setopt(curl.WRITEFUNCTION, response_data.write)
-
-        curl.perform()
-
-        # Build response
-
-        response_headers.seek(0)
-
-        headers = response_headers.read().strip()
-        if '\r\n' in headers:
-            headers = headers.split('\r\n')
-        else:
-            headers = headers.split('\n')
-        print('HEADERS IS '+str(headers))
-        http_response = headers[0].split(None, 2)
-        del headers[0]
-        if(http_response[1] == '100'):
-            del headers[0]
-            http_response=headers[0].split(None,2)
-            del headers[0]
-        headers = [(x[0].lower(), x[1]) for x in [x.split(': ') for x in headers]]
-        if http_response[0][:5].lower() != 'http/':
-            raise ValueError, "Invalid http response from cURL."
-        version = {'1.0': 10, '1.1': 11}[http_response[0][5:]]
-        status = http_response[1]
-        reason = http_response[2]
-        headers.append(('status', status))
-        return_headers = httplib2.Response(dict(headers))
-        return_headers.version = version
-        return_headers.status = int(status)
-        return_headers.reason = reason
-
-        response_data.seek(0)
-        return_content = response_data.read()
-        curl.close()
-
-        return return_headers, return_content
-    else:
-        return iHttpObject.request(iUri, method=iMethod, body=iBody, headers=iHeaders,
-                                   redirections=iRedirections, connection_type=iConnectionType)
+            body.append('')
+            body.append(payload['data'])
+    body.append('--' + BOUNDARY + '--')
+    body.append('')
+    body_bytes = CRLF.join(body)
+    content_type = 'multipart/related; boundary="%s"' % BOUNDARY
+    return content_type, body_bytes

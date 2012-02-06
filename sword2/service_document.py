@@ -71,8 +71,7 @@ class ServiceDocument(object):
             self.load_document(xml_response)
 
     def load_document(self, xml_response):
-        #try:
-        if True:
+        try:
             if self.sd_uri:
                 sd_l.debug("Attempting to load service document for %s" % self.sd_uri)
             else:
@@ -83,14 +82,12 @@ class ServiceDocument(object):
             self.valid = self.validate()
             sd_l.info("Initial SWORD2 validation checks on service document - Valid document? %s" % self.valid)
             self._enumerate_workspaces()
-        """
         except Exception, e:
             # Due to variability of underlying etree implementations, catching all
             # exceptions...
             sd_l.error("Could not parse the Service Document response from the server - %s" % e)
             sd_l.debug("Received the following raw response:")
             sd_l.debug(self.raw_response)
-            """
 
     def validate(self):
         valid = True
@@ -128,6 +125,35 @@ class ServiceDocument(object):
         else:
             valid = False
             sd_l.error("Could not find a app:workspace element in the service document.")
+            
+        # The SWORD server MUST specify the app:accept element for the app:collection element. 
+        # If the Collection can take any format content type, it should specify */* as its 
+        # value [AtomPub]. It MUST also specify an app:accept element with an alternate attribute 
+        # set to multipart-related as required by [AtomMultipart]. The formats specified by 
+        # app:accept and app:accept@alternate="multipart-related" are RECOMMENDED to be the same.
+        workspaces = self.service_dom.findall(NS['app'] % "workspace")
+        if workspaces is not None:
+            for workspace in workspaces:
+                cols = workspace.findall(NS['app'] % "collection")
+                for col in cols:
+                    # the collection may contain a sub-service document, which means it is not
+                    # beholden to the rules above
+                    service = col.find(NS['sword'] % "service")
+                    if service is not None:
+                        continue
+                    
+                    # since we have no sub-service document, we must validate
+                    accept_valid = False
+                    multipart_accept_valid = False
+                    accepts = col.findall(NS['app'] % "accept")
+                    for accept in accepts:
+                        multipart = accept.get("alternate")
+                        if not multipart_accept_valid:
+                            multipart_accept_valid = multipart is not None and multipart == "multipart-related"
+                        if not accept_valid:
+                            accept_valid = multipart is None
+                    if not multipart_accept_valid or not accept_valid:
+                        valid = False
         
         return valid
 
