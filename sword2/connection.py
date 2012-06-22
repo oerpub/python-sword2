@@ -395,6 +395,7 @@ Loading in a locally held Service Document:
         self._t.start("SD_URI request")
         resp, content = curl_request(self.h, self.sd_iri, "GET", headers=headers)
         _, took_time = self._t.time_since_start("SD_URI request")
+        content = '<?xml version="1.0" encoding="ISO-8859-1"?>\n' + content
         if self.history:
             self.history.log('SD_IRI GET', 
                              sd_iri = self.sd_iri,
