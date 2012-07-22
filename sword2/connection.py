@@ -405,6 +405,29 @@ Loading in a locally held Service Document:
             self.load_service_document(content)
         elif resp['status'] == "401":
             conn_l.error("You are unauthorised (401) to access this document on the server. Check your username/password credentials")
+
+    def get_cnx_module_list(self, workspace_url):
+        """
+        Perform an HTTP GET on the sword workspace url and return unparsed XML of the modules.
+        Documentation: https://docs.google.com/document/edit?id=1E4mzvcHGE_nljj0M2zhFfOmbqmEAtneQ-YBheUH8Znc#heading=h.jd8zorcvahy6
+        """
+        headers = self._init_http_request_headers()
+        if self.on_behalf_of:
+            headers['on-behalf-of'] = self.on_behalf_of
+        self._t.start("WORKSPACE_URL request")
+        resp, content = curl_request(self.h, workspace_url, "GET", headers=headers)
+        _, took_time = self._t.time_since_start("WORKSPACE_URL request")
+
+        if self.history:
+            self.history.log('WORKSPACE_URL GET', 
+                             sd_iri = workspace_url,
+                             response = resp, 
+                             process_duration = took_time)
+        if resp['status'] == "200":
+            conn_l.info("Received a document for %s" % workspace_url)
+            return content # return unparsed content
+        elif resp['status'] == "401":
+            conn_l.error("You are unauthorised (401) to access this document on the server. Check your username/password credentials")        
         
     def reset_transaction_history(self):
         """ Clear the transaction history - `self.history`"""
