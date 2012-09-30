@@ -25,6 +25,11 @@ from compatible_libs import etree
 
 import httplib2
 
+
+CONTENT_TYPES = ["application/atom+xml;type=entry",
+                 "text/html; charset=utf-8"]
+
+
 class Connection(object):
     """
 `Connection` - SWORD2 client
@@ -663,18 +668,22 @@ Loading in a locally held Service Document:
             location = resp.get('location', None)
             # Check response headers for updated Locatio
             return Deposit_Receipt(response_headers = dict(resp), location=location, code=204)
-        elif resp['status'] == "200":
+        elif resp['status'] in ["200", "302"]:
+            # we treat 200 and 302 the same since the both indicate the upload
+            # to the repository was successfull.
+
             #   Deposit receipt in content
-            conn_l.info("Received a valid (200) OK response.")
+            conn_l.info("Received a valid (%s) OK response." %resp['status'])
             content_type = resp.get('content-type')
             location = resp.get('location', None)
-            if content_type == "application/atom+xml;type=entry" and len(content) > 0:
+            if content_type in CONTENT_TYPES and len(content) > 0:
                 d = Deposit_Receipt(content)
                 if d.parsed:
-                    conn_l.info("Server response included a Deposit Receipt. Caching a copy in .resources['%s']" % d.edit)
+                    conn_l.info("Server response included a Deposit Receipt. "
+                                "Caching a copy in .resources['%s']" % d.edit)
                     d.response_headers = dict(resp)
                     d.location = location
-                    d.code = 200
+                    d.code = int(resp['status'])
                     self._cache_deposit_receipt(d)
                     return d
             else:
