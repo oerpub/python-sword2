@@ -54,6 +54,7 @@ def get_md5(data):
     The file is streamed as 1Mb chunks so should work for large files. File-like object must support `seek()`
     """
     if hasattr(data, "read") and hasattr(data, 'seek'):
+        data.seek(0)
         m = md5()
         chunk = data.read(1024*1024)   # 1Mb
         f_size = 0
