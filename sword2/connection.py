@@ -9,6 +9,9 @@ See http://sword-app.svn.sourceforge.net/viewvc/sword-app/spec/trunk/SWORDProfil
 about the SWORD2 AtomPub profile.
  
 """
+from cStringIO import StringIO
+from zipfile import ZipFile
+
 from sword2_logging import logging
 conn_l = logging.getLogger(__name__)
 
@@ -433,6 +436,28 @@ Loading in a locally held Service Document:
             return content # return unparsed content
         elif resp['status'] == "401":
             conn_l.error("You are unauthorised (401) to access this document on the server. Check your username/password credentials")        
+        
+    def get_cnx_module(self, module_url, packaging):
+        """
+        Fetch the zipped module from cnx.
+        """
+        module_url = module_url + '/module_export?format=%s&export=Export' % packaging
+        headers = self._init_http_request_headers()
+        resp, content = curl_request(self.h, module_url, "GET", headers=headers)
+        _, took_time = self._t.time_since_start("module_url request")
+
+        if self.history:
+            self.history.log('MODULE GET', 
+                             module_url = module_url,
+                             response = resp, 
+                             process_duration = took_time)
+        if resp['status'] == "200":
+            conn_l.info("Received zip from:%s" % module_url)
+            return ZipFile(StringIO(content))
+        elif resp['status'] == "401":
+            conn_l.error(
+                "You are unauthorised (401) to access this content ",
+                "on the server. Check your username/password credentials")        
         
     def reset_transaction_history(self):
         """ Clear the transaction history - `self.history`"""
